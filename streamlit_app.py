@@ -1,151 +1,54 @@
 import streamlit as st
 import pandas as pd
-import math
-from pathlib import Path
+import pickle
 
-# Set the title and favicon that appear in the Browser's tab bar.
-st.set_page_config(
-    page_title='GDP dashboard',
-    page_icon=':earth_americas:', # This is an emoji shortcode. Could be a URL too.
-)
+# Load the pre-trained model
+model = pickle.load(open('model.pkl', 'rb'))
 
-# -----------------------------------------------------------------------------
-# Declare some useful functions.
+# Design the Website UI Layout
+st.title("Credit Risk Assessment App")
 
-@st.cache_data
-def get_gdp_data():
-    """Grab GDP data from a CSV file.
-
-    This uses caching to avoid having to read the file every time. If we were
-    reading from an HTTP endpoint instead of a file, it's a good idea to set
-    a maximum age to the cache with the TTL argument: @st.cache_data(ttl='1d')
-    """
-
-    # Instead of a CSV on disk, you could read from an HTTP endpoint here too.
-    DATA_FILENAME = Path(__file__).parent/'data/gdp_data.csv'
-    raw_gdp_df = pd.read_csv(DATA_FILENAME)
-
-    MIN_YEAR = 1960
-    MAX_YEAR = 2022
-
-    # The data above has columns like:
-    # - Country Name
-    # - Country Code
-    # - [Stuff I don't care about]
-    # - GDP for 1960
-    # - GDP for 1961
-    # - GDP for 1962
-    # - ...
-    # - GDP for 2022
-    #
-    # ...but I want this instead:
-    # - Country Name
-    # - Country Code
-    # - Year
-    # - GDP
-    #
-    # So let's pivot all those year-columns into two: Year and GDP
-    gdp_df = raw_gdp_df.melt(
-        ['Country Code'],
-        [str(x) for x in range(MIN_YEAR, MAX_YEAR + 1)],
-        'Year',
-        'GDP',
-    )
-
-    # Convert years from string to integers
-    gdp_df['Year'] = pd.to_numeric(gdp_df['Year'])
-
-    return gdp_df
-
-gdp_df = get_gdp_data()
-
-# -----------------------------------------------------------------------------
-# Draw the actual page
-
-# Set the title that appears at the top of the page.
-'''
-# :earth_americas: GDP dashboard
-
-Browse GDP data from the [World Bank Open Data](https://data.worldbank.org/) website. As you'll
-notice, the data only goes to 2022 right now, and datapoints for certain years are often missing.
-But it's otherwise a great (and did I mention _free_?) source of data.
-'''
-
-# Add some spacing
-''
-''
-
-min_value = gdp_df['Year'].min()
-max_value = gdp_df['Year'].max()
-
-from_year, to_year = st.slider(
-    'Which years are you interested in?',
-    min_value=min_value,
-    max_value=max_value,
-    value=[min_value, max_value])
-
-countries = gdp_df['Country Code'].unique()
-
-if not len(countries):
-    st.warning("Select at least one country")
-
-selected_countries = st.multiselect(
-    'Which countries would you like to view?',
-    countries,
-    ['DEU', 'FRA', 'GBR', 'BRA', 'MEX', 'JPN'])
-
-''
-''
-''
-
-# Filter the data
-filtered_gdp_df = gdp_df[
-    (gdp_df['Country Code'].isin(selected_countries))
-    & (gdp_df['Year'] <= to_year)
-    & (from_year <= gdp_df['Year'])
+# Define the input features for the model
+feature_names = [
+    'Age', 'Income', 'LoanAmount', 'CreditScore', 'MonthsEmployed',
+    'NumCreditLines', 'InterestRate', 'LoanTerm', 'DTIRatio',
+    'Education', 'EmploymentType', 'MaritalStatus', 'HasMortgage',
+    'HasDependents', 'LoanPurpose', 'HasCoSigner'
 ]
 
-st.header('GDP over time', divider='gray')
+# Define variables that need numeric input
+scale_vars = ['Age', 'Income', 'LoanAmount', 'CreditScore', 'MonthsEmployed',
+              'NumCreditLines', 'InterestRate', 'LoanTerm', 'DTIRatio']
 
-''
+# Collect user inputs
 
-st.line_chart(
-    filtered_gdp_df,
-    x='Year',
-    y='GDP',
-    color='Country Code',
-)
+user_inputs = {}
+for i, feature in enumerate(feature_names):
+    if feature in scale_vars:
+        # Collects a number for variables that need scaling
+        user_inputs[feature] = st.number_input(f"Enter value for {feature}")
+    else:
+        # Collects text for other variables
+        user_inputs[feature] = st.text_input(f"Enter value for {feature}")
 
-''
-''
+# Wrap the dictionary in a list [] to make it a 2D sample
+input_df = pd.DataFrame([user_inputs])
 
+input_df['Education'] = pd.factorize(input_df['Education'])[0]
+input_df['EmploymentType'] = pd.factorize(input_df['EmploymentType'])[0]
+input_df['MaritalStatus'] = pd.factorize(input_df['MaritalStatus'])[0]
+input_df['HasMortgage'] = pd.factorize(input_df['HasMortgage'])[0]
+input_df['HasDependents'] = pd.factorize(input_df['HasDependents'])[0]
+input_df['LoanPurpose'] = pd.factorize(input_df['LoanPurpose'])[0]
+input_df['HasCoSigner'] = pd.factorize(input_df['HasCoSigner'])[0]
 
-first_year = gdp_df[gdp_df['Year'] == from_year]
-last_year = gdp_df[gdp_df['Year'] == to_year]
+print("Expected features:", model.booster_.feature_name())
+print("Provided features:", input_df.columns.tolist())
 
-st.header(f'GDP in {to_year}', divider='gray')
+# Trigger Predictions with a Button
+if st.button("Predict"):
+    # Make the prediction
+    prediction = model.predict(input_df)
 
-''
-
-cols = st.columns(4)
-
-for i, country in enumerate(selected_countries):
-    col = cols[i % len(cols)]
-
-    with col:
-        first_gdp = first_year[first_year['Country Code'] == country]['GDP'].iat[0] / 1000000000
-        last_gdp = last_year[last_year['Country Code'] == country]['GDP'].iat[0] / 1000000000
-
-        if math.isnan(first_gdp):
-            growth = 'n/a'
-            delta_color = 'off'
-        else:
-            growth = f'{last_gdp / first_gdp:,.2f}x'
-            delta_color = 'normal'
-
-        st.metric(
-            label=f'{country} GDP',
-            value=f'{last_gdp:,.0f}B',
-            delta=growth,
-            delta_color=delta_color
-        )
+    # Display the final output
+    st.success(f"The predicted value is: {prediction[0]}")
